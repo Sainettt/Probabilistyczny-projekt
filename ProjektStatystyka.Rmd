@@ -198,6 +198,25 @@ ggplot(dt, aes(x = life_sat)) +
         plot.subtitle = element_text(hjust = 0.5))
 ```
 
+### 2.2.1. QQ-plot — diagnostyka zgodności z rozkładem normalnym
+
+```{r qq-plot, fig.cap="Rysunek 2. Wykres kwantyl-kwantyl (QQ-plot) dla zmiennej life_sat"}
+ggplot(dt, aes(sample = life_sat)) +
+  stat_qq(alpha = 0.3, color = "steelblue") +
+  stat_qq_line(color = "red", linewidth = 1) +
+  labs(
+    title = "QQ-plot: life_sat vs rozkład normalny",
+    subtitle = "Punkty leżące na czerwonej linii oznaczają zgodność z N(μ, σ²)",
+    x = "Kwantyle teoretyczne (N(0,1))",
+    y = "Kwantyle empiryczne (life_sat)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+```
+
+Stopniowe odchylenia punktów od linii referencyjnej w okolicy skrajnych wartości (1 oraz 10) potwierdzają, że rozkład empiryczny — z natury dyskretny i ograniczony — nie jest dokładnie normalny. Centralna część rozkładu pasuje jednak dobrze, co przy N > 30 000 i odporności testów parametrycznych na odchylenia od normalności (CTG) uzasadnia ich dalsze wykorzystanie.
+
 ## 2.3. Wniosek — dobór modelu rozkładu
 
 ```{r wniosek-rozklad, echo=FALSE}
@@ -505,7 +524,7 @@ kable(hipotezy_summary, caption = "Tabela 9. Zbiorcze wyniki testów hipotez (α
 
 ## 5.1. Macierz korelacji
 
-```{r macierz-korelacji, fig.cap="Rysunek 2. Macierz korelacji zmiennych ilościowych"}
+```{r macierz-korelacji, fig.cap="Rysunek 3. Macierz korelacji zmiennych ilościowych"}
 zmienne_num <- dt[, .(life_sat, cheat_taxes, cheat_fare, age,
                        income, religion, politics, happiness, trust)]
 cor_mat <- cor(zmienne_num, use = "complete.obs")
@@ -562,11 +581,25 @@ kable(coef_tab, caption = "Tabela 10. Współczynniki modelu regresji liniowej")
 
 ### 5.2.3. Diagnostyka modelu
 
-```{r diagnostyka, fig.cap="Rysunek 3. Diagnostyka modelu regresji (reszty)", fig.width=10, fig.height=8}
+```{r diagnostyka, fig.cap="Rysunek 4. Diagnostyka modelu regresji (reszty)", fig.width=10, fig.height=8}
 par(mfrow = c(2, 2))
 plot(model)
 par(mfrow = c(1, 1))
 ```
+
+**Sprawdzenie współliniowości (VIF):** wartości VIF > 5 (a tym bardziej > 10) sygnalizują problem ze współliniowością predyktorów. Dla zmiennych jakościowych `car::vif()` zwraca GVIF^(1/(2·Df)), które interpretujemy analogicznie.
+
+```{r vif-check}
+vif_tab <- car::vif(model)
+kable(round(vif_tab, 3), caption = "Tabela 11. Współczynniki VIF predyktorów modelu")
+```
+
+```{r vif-extract, echo=FALSE}
+vif_vec <- if (is.matrix(vif_tab)) vif_tab[, ncol(vif_tab)] else vif_tab
+max_vif <- max(vif_vec)
+```
+
+Najwyższa wartość VIF wynosi **`r round(max_vif, 2)`** — `r ifelse(max_vif < 5, "znacznie poniżej progu 5, więc współliniowość nie zagraża stabilności oszacowań", ifelse(max_vif < 10, "w strefie umiarkowanego ryzyka (5–10) — interpretacja β powinna być ostrożna", "powyżej progu 10 — silna współliniowość, model wymaga przebudowy"))`.
 
 ### 5.2.4. Interpretacja
 
@@ -581,17 +614,37 @@ F_pval  <- pf(F_stat[1], F_stat[2], F_stat[3], lower.tail = FALSE)
 - **R²_adj = `r round(R2_adj, 4)`** — wartość skorygowana o liczbę predyktorów (uwzględnia karę za złożoność modelu).
 - **F(`r F_stat[2]`, `r F_stat[3]`) = `r round(F_stat[1], 2)`, p = `r format.pval(F_pval, digits = 3)`** — model jako całość jest `r ifelse(F_pval < 0.05, "istotny statystycznie", "nieistotny statystycznie")` przy α = 0.05.
 
-**Interpretacja kierunków współczynników β** (przy ceteris paribus):
+```{r beta-extract, echo=FALSE}
+coef_vec <- coef(model)
+pval_mat <- model_summary$coefficients
 
-- **`income`** — dodatni β oznacza, że wyższy decyl dochodu wiąże się z wyższym zadowoleniem z życia.
-- **`age`** — znak β wskazuje, czy zadowolenie rośnie (β > 0), czy maleje (β < 0) z wiekiem.
-- **`trust`** — osoby ufające innym mają (przeciętnie) wyższe `life_sat` o wartość β_trust w porównaniu z nieufającymi.
-- **`religion`** — pamiętaj o odwróconej skali (1 = bardzo ważna, 4 = nieważna). Ujemny β oznacza, że spadek religijności wiąże się ze spadkiem zadowolenia (czyli bardziej religijni są bardziej zadowoleni).
-- **`education`** — efekty względem grupy referencyjnej (poziom „Brak"). Istotność widoczna w kolumnie p-value.
-- **`sex` (Kobieta vs Mężczyzna)** — różnica średnia po kontroli pozostałych predyktorów; poziomem referencyjnym jest „Mężczyzna".
-- **`politics`** — przesunięcie poglądów w prawo (1 → 10) zmienia `life_sat` o β jednostek.
+get_b <- function(name) if (name %in% names(coef_vec)) coef_vec[[name]] else NA_real_
+get_p <- function(name) if (name %in% rownames(pval_mat)) pval_mat[name, "Pr(>|t|)"] else NA_real_
 
-**Istotne predyktory (p < 0.05):** zaznaczone w kolumnie *„p < 0.05"* Tabeli 10.
+b_income   <- get_b("income");   p_income   <- get_p("income")
+b_age      <- get_b("age");      p_age      <- get_p("age")
+b_trust    <- get_b("trust");    p_trust    <- get_p("trust")
+b_religion <- get_b("religion"); p_religion <- get_p("religion")
+b_politics <- get_b("politics"); p_politics <- get_p("politics")
+b_sex      <- get_b("sexKobieta"); p_sex    <- get_p("sexKobieta")
+
+fmt_sig <- function(p) ifelse(is.na(p), "—",
+                       ifelse(p < 0.001, "p < 0.001",
+                       ifelse(p < 0.05,  paste0("p = ", format.pval(p, digits = 2)),
+                                         paste0("p = ", round(p, 3), ", n.s."))))
+```
+
+**Interpretacja współczynników β** (przy ceteris paribus, na podstawie Tabeli 10):
+
+- **`income`**: β = `r round(b_income, 4)`, `r fmt_sig(p_income)` — wzrost decyla dochodu o 1 wiąże się ze `r ifelse(b_income > 0, "wzrostem", "spadkiem")` `life_sat` o `r round(abs(b_income), 3)` punktu.
+- **`age`**: β = `r round(b_age, 4)`, `r fmt_sig(p_age)` — każdy dodatkowy rok życia `r ifelse(b_age > 0, "podnosi", "obniża")` `life_sat` o `r round(abs(b_age), 4)` punktu.
+- **`trust`**: β = `r round(b_trust, 4)`, `r fmt_sig(p_trust)` — osoby ufające innym mają średnio o `r round(abs(b_trust), 3)` punktu `r ifelse(b_trust > 0, "wyższe", "niższe")` `life_sat` niż nieufające.
+- **`religion`**: β = `r round(b_religion, 4)`, `r fmt_sig(p_religion)` — przesunięcie o 1 stopień w stronę „nieważna" (skala odwrócona: 1 = bardzo ważna, 4 = nieważna) `r ifelse(b_religion < 0, "obniża", "podnosi")` `life_sat` o `r round(abs(b_religion), 3)` punktu, co oznacza, że `r ifelse(b_religion < 0, "bardziej religijni respondenci są przeciętnie bardziej zadowoleni", "mniej religijni respondenci są przeciętnie bardziej zadowoleni")`.
+- **`politics`**: β = `r round(b_politics, 4)`, `r fmt_sig(p_politics)` — przesunięcie poglądów o 1 punkt w prawo (skala 1 = lewica, 10 = prawica) `r ifelse(b_politics > 0, "podnosi", "obniża")` `life_sat` o `r round(abs(b_politics), 3)` punktu.
+- **`sex` (Kobieta vs Mężczyzna)**: β = `r round(b_sex, 4)`, `r fmt_sig(p_sex)` — kobiety mają średnio o `r round(abs(b_sex), 3)` punktu `r ifelse(b_sex > 0, "wyższe", "niższe")` `life_sat` niż mężczyźni, po kontroli pozostałych predyktorów.
+- **`education`**: efekty względem grupy referencyjnej („Brak"). Wyższe poziomy wykształcenia wykazują dodatnie β (Tabela 10), z istotnością widoczną w kolumnie *„p < 0.05"*.
+
+**Istotne predyktory (p < 0.05):** zaznaczone w kolumnie *„p < 0.05"* Tabeli 10. Należy pamiętać, że przy N > 30 000 nawet drobne efekty osiągają istotność statystyczną — kluczowa jest **wielkość** β, a nie samo p-value.
 
 **Wniosek końcowy:** Model objaśnia umiarkowaną część wariancji zadowolenia z życia — typową dla badań społecznych, gdzie indywidualne różnice (osobowość, zdrowie, relacje, doświadczenia) odgrywają dużą rolę i nie są mierzone przez WVS. Dochód, zaufanie społeczne oraz poziom religijności okazują się jednak istotnymi predyktorami nawet po wzajemnej kontroli, co potwierdza ich niezależny wkład w kształtowanie subiektywnego dobrostanu.
 
